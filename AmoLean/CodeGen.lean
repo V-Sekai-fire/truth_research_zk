@@ -21,20 +21,20 @@ inductive LowLevelExpr where
   | litInt : Int → LowLevelExpr
   | varRef : String → LowLevelExpr
   | binOp : String → LowLevelExpr → LowLevelExpr → LowLevelExpr
-  | funcCall : String → List LowLevelExpr → LowLevelExpr  -- Para pow, etc.
-  deriving Repr, Inhabited
+  | funcCall : String → List LowLevelExpr → LowLevelExpr
+  deriving Repr, Inhabited, BEq
 
-/-- Instrucción de asignación -/
+/-- Assignment statement: varName := value -/
 structure Assignment where
   varName : String
   value : LowLevelExpr
-  deriving Repr
+  deriving Repr, BEq, Inhabited
 
-/-- Programa como secuencia de asignaciones + resultado final -/
+/-- Program: list of assignments + final result expression -/
 structure LowLevelProgram where
   assignments : List Assignment
   result : LowLevelExpr
-  deriving Repr
+  deriving Repr, BEq, Inhabited
 
 /-! ## Parte 2: Lowering de Expr a LowLevelExpr -/
 

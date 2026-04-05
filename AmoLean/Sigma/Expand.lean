@@ -361,17 +361,38 @@ def expandKernel : Kernel → ExpandedKernel
   | .addRoundConst r n => expandAddRoundConst r n
   -- Phase 8: Radix-4 NTT
   | .butterfly4 => expandButterfly4
-  -- mapScalar: the scalarBody carries pre-lowered (varName, valueExpr) pairs
-  -- from the E-graph optimized Expr Int. Convert to ScalarAssign statements.
-  | .mapScalar cols bodyPairs =>
+  -- mapScalar: convert typed LowLevelProgram → ExpandedKernel (ScalarAssign list).
+  -- LowLevelExpr.varRef "x0" → ScalarExpr.var (input 0)
+  -- LowLevelExpr.litInt n → ScalarExpr.const n
+  -- LowLevelExpr.binOp "+" l r → ScalarExpr.add ...
+  | .mapScalar cols program =>
+    let rec llToScalar : AmoLean.LowLevelExpr → ScalarExpr
+      | .litInt n => .const n
+      | .varRef s =>
+        if s.startsWith "x" then
+          .var (.input (s.drop 1 |>.toNat?.getD 0))
+        else if s.startsWith "t" then
+          .var (.temp (s.drop 1 |>.toNat?.getD 0))
+        else .var ⟨s, 0⟩
+      | .binOp op l r =>
+        let l' := llToScalar l; let r' := llToScalar r
+        match op with
+        | "+" => .add l' r'
+        | "-" => .sub l' r'
+        | "*" => .mul l' r'
+        | _   => .mul l' r'  -- fallback
+      | .funcCall _ args =>
+        match args with
+        | [a] => llToScalar a
+        | _ => .const 0  -- unsupported
     let inputVars := (List.range cols).map ScalarVar.input
-    let assigns := bodyPairs.map fun (name, value) =>
-      -- Temp assignments: t0, t1, ... from the let-lifted SSA
-      { target := ScalarVar.temp (name.drop 1 |>.toNat?.getD 0),
-        value := ScalarExpr.var (.temp 0) } -- placeholder; actual value in Rust codegen
+    -- Convert each assignment: t0 := expr, t1 := expr, ...
+    let assigns := program.assignments.map fun a =>
+      let idx := a.varName.drop 1 |>.toNat?.getD 0
+      { target := ScalarVar.temp idx, value := llToScalar a.value : ScalarAssign }
+    -- Final result → output[0]
     let outputAssign : ScalarAssign :=
-      { target := ScalarVar.output 0,
-        value := ScalarExpr.var (.temp (bodyPairs.length - 1)) }
+      { target := ScalarVar.output 0, value := llToScalar program.result }
     { inputVars, outputVars := [ScalarVar.output 0],
       body := assigns ++ [outputAssign] }
 
