@@ -17,6 +17,7 @@ abbrev VarId := Nat
 /--
 Expresiones aritméticas sobre un tipo base `α`.
 Esta es nuestra representación sintáctica - el "OptExpr" del diseño estratificado.
+Polynomial ring: {const, var, +, *, ^n}.
 -/
 inductive Expr (α : Type) where
   | const : α → Expr α                           -- Constante literal
