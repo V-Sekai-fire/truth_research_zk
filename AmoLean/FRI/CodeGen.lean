@@ -301,6 +301,9 @@ def kernelToC (state : CodeGenState) (kernel : Kernel) (gather : Gather) (scatte
 {pad}  out[{o0} + 3] = t1 - t3;
 {pad}{rb}"
 
+  | .mapScalar cols _program =>
+    s!"{pad}// mapScalar kernel (cols={cols}) — see Sigma/Expand.lean for expansion"
+
 /-! ## Part 8: CryptoSigma Code Generation -/
 
 /-- Generate C code from CryptoSigma -/

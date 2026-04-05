@@ -23,6 +23,7 @@
 -/
 
 import AmoLean.Basic
+import AmoLean.CodeGen
 import AmoLean.Vector.Basic
 
 namespace AmoLean.Matrix
