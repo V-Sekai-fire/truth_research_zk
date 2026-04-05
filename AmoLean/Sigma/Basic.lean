@@ -374,8 +374,8 @@ def lower (m n : Nat) (state : LowerState) (mExpr : MatExpr α m n) : (SigmaExpr
     -- Each iteration: gather `cols` elements from row i, apply mapScalar, scatter 1 result.
     let (innerExpr, state1) := lower rows cols state inputMat
     let (loopVar, state2) := freshLoopVar state1
-    let rowGather := Gather.strided cols (.mul (.varRef loopVar) (.const cols)) 1
-    let rowScatter := Scatter.contiguous 1 (.varRef loopVar)
+    let rowGather := Gather.strided cols (.affine 0 cols loopVar) 1
+    let rowScatter := Scatter.contiguous 1 (.var loopVar)
     let body := .compute (.mapScalar cols) rowGather rowScatter
     (.seq innerExpr (.loop rows loopVar body), state2)
 termination_by mExpr.nodeCount
