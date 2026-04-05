@@ -25,6 +25,7 @@
 import AmoLean.Matrix.Basic
 import AmoLean.Matrix.Perm
 import AmoLean.CodeGen
+import AmoLean.EGraph.Saturate
 
 namespace AmoLean.Sigma
 
