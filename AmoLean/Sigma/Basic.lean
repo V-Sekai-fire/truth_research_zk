@@ -374,20 +374,12 @@ def lower (m n : Nat) (state : LowerState) (mExpr : MatExpr α m n) : (SigmaExpr
       (Gather.contiguous stateSize (.const 0))
       (Scatter.contiguous stateSize (.const 0))), state1)
 
-  | @MatExpr.mapScalarExpr _ rows cols _scalarFn inputMat =>
-    -- Lower input matrix, then loop over rows applying the scalar kernel.
-    -- NOTE: The scalar function (_scalarFn : Expr α) is NOT lowered here because
-    -- `lower` is generic over α but toLowLevel requires Expr Int.
-    -- E-graph optimization and toLowLevel happen at the call site (CodeGen.lean)
-    -- where α = Int is known. Here we emit an identity placeholder; the caller
-    -- must replace it via `lowerMapScalarInt` when α = Int.
+  | @MatExpr.mapScalarExpr _ rows cols program inputMat =>
     let (innerExpr, state1) := lower rows cols state inputMat
     let (loopVar, state2) := freshLoopVar state1
     let rowGather := Gather.strided cols (.affine 0 cols loopVar) 1
     let rowScatter := Scatter.contiguous 1 (.var loopVar)
-    let identityProgram : AmoLean.LowLevelProgram :=
-      { assignments := [], result := .varRef "x0" }
-    let body := .compute (.mapScalar cols identityProgram) rowGather rowScatter
+    let body := .compute (.mapScalar cols program) rowGather rowScatter
     (.seq innerExpr (.loop rows loopVar body), state2)
 termination_by mExpr.nodeCount
 decreasing_by
@@ -427,21 +419,6 @@ Use `simp only [lower_identity, lower_kron_identity_left, ...]` instead of
 
 def lowerFresh (m n : Nat) (e : MatExpr α m n) : SigmaExpr :=
   (lower m n {} e).1
-
-/-- Specialized lowering for mapScalarExpr when α = Int.
-    E-graph optimizes the scalar polynomial, then lowers to LowLevelProgram.
-    Use this instead of lowerFresh when you have MatExpr.mapScalarExpr with Expr Int. -/
-def lowerMapScalarInt (rows cols : Nat) (scalarFn : AmoLean.Expr Int)
-    (inputMat : MatExpr Int rows cols) : SigmaExpr :=
-  let (innerExpr, state1) := lower rows cols {} inputMat
-  let (loopVar, state2) := freshLoopVar state1
-  let rowGather := Gather.strided cols (.affine 0 cols loopVar) 1
-  let rowScatter := Scatter.contiguous 1 (.var loopVar)
-  let optExpr := (AmoLean.EGraph.optimizeBasic scalarFn).getD scalarFn
-  let varNames : AmoLean.VarId → String := fun i => s!"x{i}"
-  let program := AmoLean.toLowLevel varNames optExpr
-  let body := SigmaExpr.compute (.mapScalar cols program) rowGather rowScatter
-  .seq innerExpr (.loop rows loopVar body)
 
 /-! ## Part 6: Tests -/
 

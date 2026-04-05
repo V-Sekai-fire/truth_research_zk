@@ -254,14 +254,11 @@ inductive MatExpr (α : Type) : Nat → Nat → Type where
       @param stateSize: Size of the state vector (t) -/
   | addRoundConst : (round : Nat) → (stateSize : Nat) → MatExpr α t 1 → MatExpr α t 1
 
-  /-- Apply a scalar polynomial (Expr α in `cols` variables) independently to
-      each row of an n×cols matrix, producing an n×1 column vector.
-      Row i: output[i] = eval(scalarFn, input[i*cols .. (i+1)*cols-1]).
-      The scalarFn uses Var 0..cols-1 to reference columns within each row.
-      E-graph optimizes scalarFn before lowering.
-      Sigma-SPL lowering: iterate n (gather row → eval scalarFn → scatter result).
-      Rust backend: for i in 0..n { output[i] = scalarFn(input[i*cols..]) } -/
-  | mapScalarExpr : Expr α → MatExpr α n cols → MatExpr α n 1
+  /-- Apply a pre-lowered scalar program per row of an n×cols matrix → n×1.
+      The caller E-graph-optimizes and lowers `Expr Int` to `LowLevelProgram`
+      before constructing this node. Sigma-SPL lowering just wires the program
+      into the loop structure. -/
+  | mapScalarExpr : AmoLean.LowLevelProgram → MatExpr α n cols → MatExpr α n 1
 
 namespace MatExpr
 
