@@ -361,8 +361,19 @@ def expandKernel : Kernel → ExpandedKernel
   | .addRoundConst r n => expandAddRoundConst r n
   -- Phase 8: Radix-4 NTT
   | .butterfly4 => expandButterfly4
-  -- mapScalar: identity expansion (scalar function applied externally via CodeGen)
-  | .mapScalar cols => expandIdentity cols
+  -- mapScalar: the scalarBody carries pre-lowered (varName, valueExpr) pairs
+  -- from the E-graph optimized Expr Int. Convert to ScalarAssign statements.
+  | .mapScalar cols bodyPairs =>
+    let inputVars := (List.range cols).map ScalarVar.input
+    let assigns := bodyPairs.map fun (name, value) =>
+      -- Temp assignments: t0, t1, ... from the let-lifted SSA
+      { target := ScalarVar.temp (name.drop 1 |>.toNat?.getD 0),
+        value := ScalarExpr.var (.temp 0) } -- placeholder; actual value in Rust codegen
+    let outputAssign : ScalarAssign :=
+      { target := ScalarVar.output 0,
+        value := ScalarExpr.var (.temp (bodyPairs.length - 1)) }
+    { inputVars, outputVars := [ScalarVar.output 0],
+      body := assigns ++ [outputAssign] }
 
 /-! ## Part 4: Expanded SigmaExpr -/
 
