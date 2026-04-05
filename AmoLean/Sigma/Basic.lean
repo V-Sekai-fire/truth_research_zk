@@ -132,6 +132,9 @@ inductive Kernel where
   | addRoundConst : Nat → Nat → Kernel     -- Add round constants: round, size
   -- Phase 8: Radix-4 NTT
   | butterfly4 : Kernel                    -- Radix-4 butterfly (4-point DFT with ω)
+  -- mapScalarExpr: apply a scalar polynomial per row of an n×cols matrix
+  -- The LowLevelProgram is the E-graph-optimized, let-lifted scalar function.
+  | mapScalar : (cols : Nat) → Kernel
   deriving Repr, BEq, Inhabited
 
 namespace Kernel
@@ -149,6 +152,7 @@ def inputSize : Kernel → Nat
   | mdsInternal n => n
   | addRoundConst _ n => n
   | butterfly4 => 4
+  | mapScalar cols => cols
 
 def toString : Kernel → String
   | identity n => s!"I_{n}"
@@ -163,6 +167,7 @@ def toString : Kernel → String
   | mdsInternal n => s!"MDS_Internal({n})"
   | addRoundConst r n => s!"AddRC(round={r}, size={n})"
   | butterfly4 => "Butterfly4"
+  | mapScalar cols => s!"MapScalar({cols})"
 
 instance : ToString Kernel := ⟨Kernel.toString⟩
 
@@ -363,6 +368,16 @@ def lower (m n : Nat) (state : LowerState) (mExpr : MatExpr α m n) : (SigmaExpr
     (.seq innerExpr (.compute (.addRoundConst round stateSize)
       (Gather.contiguous stateSize (.const 0))
       (Scatter.contiguous stateSize (.const 0))), state1)
+
+  | @MatExpr.mapScalarExpr _ rows cols _scalarFn inputMat =>
+    -- Lower the input matrix, then loop over rows applying the scalar kernel.
+    -- Each iteration: gather `cols` elements from row i, apply mapScalar, scatter 1 result.
+    let (innerExpr, state1) := lower rows cols state inputMat
+    let (loopVar, state2) := freshLoopVar state1
+    let rowGather := Gather.strided cols (.mul (.varRef loopVar) (.const cols)) 1
+    let rowScatter := Scatter.contiguous 1 (.varRef loopVar)
+    let body := .compute (.mapScalar cols) rowGather rowScatter
+    (.seq innerExpr (.loop rows loopVar body), state2)
 termination_by mExpr.nodeCount
 decreasing_by
   all_goals simp_wf

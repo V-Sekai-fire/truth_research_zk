@@ -361,6 +361,8 @@ def expandKernel : Kernel → ExpandedKernel
   | .addRoundConst r n => expandAddRoundConst r n
   -- Phase 8: Radix-4 NTT
   | .butterfly4 => expandButterfly4
+  -- mapScalar: identity expansion (scalar function applied externally via CodeGen)
+  | .mapScalar cols => expandIdentity cols
 
 /-! ## Part 4: Expanded SigmaExpr -/
 

@@ -254,6 +254,15 @@ inductive MatExpr (α : Type) : Nat → Nat → Type where
       @param stateSize: Size of the state vector (t) -/
   | addRoundConst : (round : Nat) → (stateSize : Nat) → MatExpr α t 1 → MatExpr α t 1
 
+  /-- Apply a scalar polynomial (Expr α in `cols` variables) independently to
+      each row of an n×cols matrix, producing an n×1 column vector.
+      Row i: output[i] = eval(scalarFn, input[i*cols .. (i+1)*cols-1]).
+      The scalarFn uses Var 0..cols-1 to reference columns within each row.
+      E-graph optimizes scalarFn before lowering.
+      Sigma-SPL lowering: iterate n (gather row → eval scalarFn → scatter result).
+      Rust backend: for i in 0..n { output[i] = scalarFn(input[i*cols..]) } -/
+  | mapScalarExpr : Expr α → MatExpr α n cols → MatExpr α n 1
+
 namespace MatExpr
 
 /-! ### Identity Predicate (for lowering case analysis)
@@ -399,6 +408,7 @@ def nodeCount : MatExpr α m n → Nat
   | partialElemwise _ _ A => 1 + nodeCount A
   | mdsApply _ _ A => 1 + nodeCount A
   | addRoundConst _ _ A => 1 + nodeCount A
+  | mapScalarExpr _ A   => 1 + nodeCount A
 
 /-- Estimate operation count after expansion (for cost model).
     This gives an upper bound on the number of scalar operations. -/
@@ -435,6 +445,9 @@ def opCountEstimate : MatExpr α m n → Nat
   | addRoundConst _ t A =>
     let baseCost := opCountEstimate A
     baseCost + t  -- t additions
+  | mapScalarExpr _ A =>
+    let baseCost := opCountEstimate A
+    baseCost + m * 10  -- Assume ~10 ops per scalar eval (polynomial in cols vars)
 
 /-- Full round S-box: apply x^α to all state elements -/
 def fullRoundSbox (α : Nat) (state : MatExpr β m n) : MatExpr β m n :=
