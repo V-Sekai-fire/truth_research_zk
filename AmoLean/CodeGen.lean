@@ -42,6 +42,8 @@ structure LowLevelProgram where
 structure CodeGenState where
   nextVar : Nat := 0
   assignments : List Assignment := []
+  /-- CSE cache: maps structurally equal Expr to their temp variable name. -/
+  exprCache : List (Expr Int × String) := []
   deriving Inhabited
 
 /-- Generar nombre de variable temporal fresco -/
@@ -61,29 +63,43 @@ def lowerExpr (varNames : VarId → String) :
   | const c, s => (LowLevelExpr.litInt c, s)
   | var v, s => (LowLevelExpr.varRef (varNames v), s)
   | add e1 e2, s =>
-      let (ll1, s1) := lowerExpr varNames e1 s
-      let (ll2, s2) := lowerExpr varNames e2 s1
-      let (tmpName, s3) := freshVar s2
-      let assignment := { varName := tmpName, value := LowLevelExpr.binOp "+" ll1 ll2 }
-      (LowLevelExpr.varRef tmpName, addAssignment s3 assignment)
+      -- CSE: check if this exact expression was already lowered
+      let fullExpr := Expr.add e1 e2
+      match s.exprCache.find? (fun (e, _) => e == fullExpr) with
+      | some (_, cachedName) => (LowLevelExpr.varRef cachedName, s)
+      | none =>
+        let (ll1, s1) := lowerExpr varNames e1 s
+        let (ll2, s2) := lowerExpr varNames e2 s1
+        let (tmpName, s3) := freshVar s2
+        let assignment := { varName := tmpName, value := LowLevelExpr.binOp "+" ll1 ll2 }
+        let s4 := addAssignment s3 assignment
+        (LowLevelExpr.varRef tmpName, { s4 with exprCache := s4.exprCache ++ [(fullExpr, tmpName)] })
   | mul e1 e2, s =>
-      let (ll1, s1) := lowerExpr varNames e1 s
-      let (ll2, s2) := lowerExpr varNames e2 s1
-      let (tmpName, s3) := freshVar s2
-      let assignment := { varName := tmpName, value := LowLevelExpr.binOp "*" ll1 ll2 }
-      (LowLevelExpr.varRef tmpName, addAssignment s3 assignment)
+      let fullExpr := Expr.mul e1 e2
+      match s.exprCache.find? (fun (e, _) => e == fullExpr) with
+      | some (_, cachedName) => (LowLevelExpr.varRef cachedName, s)
+      | none =>
+        let (ll1, s1) := lowerExpr varNames e1 s
+        let (ll2, s2) := lowerExpr varNames e2 s1
+        let (tmpName, s3) := freshVar s2
+        let assignment := { varName := tmpName, value := LowLevelExpr.binOp "*" ll1 ll2 }
+        let s4 := addAssignment s3 assignment
+        (LowLevelExpr.varRef tmpName, { s4 with exprCache := s4.exprCache ++ [(fullExpr, tmpName)] })
   | pow e n, s =>
-      let (llBase, s1) := lowerExpr varNames e s
-      let (tmpName, s2) := freshVar s1
-      -- Para potencias pequeñas, generar multiplicaciones inline
-      -- Para potencias grandes, usar función pow
-      let value :=
-        if n == 0 then LowLevelExpr.litInt 1
-        else if n == 1 then llBase
-        else if n == 2 then LowLevelExpr.binOp "*" llBase llBase
-        else LowLevelExpr.funcCall "pow_int" [llBase, LowLevelExpr.litInt n]
-      let assignment := { varName := tmpName, value := value }
-      (LowLevelExpr.varRef tmpName, addAssignment s2 assignment)
+      let fullExpr := Expr.pow e n
+      match s.exprCache.find? (fun (e, _) => e == fullExpr) with
+      | some (_, cachedName) => (LowLevelExpr.varRef cachedName, s)
+      | none =>
+        let (llBase, s1) := lowerExpr varNames e s
+        let (tmpName, s2) := freshVar s1
+        let value :=
+          if n == 0 then LowLevelExpr.litInt 1
+          else if n == 1 then llBase
+          else if n == 2 then LowLevelExpr.binOp "*" llBase llBase
+          else LowLevelExpr.funcCall "pow_int" [llBase, LowLevelExpr.litInt n]
+        let assignment := { varName := tmpName, value := value }
+        let s3 := addAssignment s2 assignment
+        (LowLevelExpr.varRef tmpName, { s3 with exprCache := s3.exprCache ++ [(fullExpr, tmpName)] })
 termination_by e _ => sizeOf e
 
 /-- Convertir expresión completa a programa -/

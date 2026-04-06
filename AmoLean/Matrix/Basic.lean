@@ -261,6 +261,16 @@ inductive MatExpr (α : Type) : Nat → Nat → Type where
       into the loop structure. -/
   | mapScalarExpr : AmoLean.LowLevelProgram → MatExpr α n cols → MatExpr α n 1
 
+  /-- Bit-decompose: each row's single value → width binary digits (0/1).
+      Bridge from Z arithmetic to GF(2) bit-level operations.
+      d = Σ bᵢ·2ⁱ where each bᵢ ∈ {0,1}. -/
+  | bitDecompose : (width : Nat) → MatExpr α n 1 → MatExpr α n width
+
+  /-- Bit-compose: each row's width binary digits → single integer value.
+      Bridge from GF(2) bit-level back to Z arithmetic.
+      d = Σ bᵢ·2ⁱ. -/
+  | bitCompose : (width : Nat) → MatExpr α n width → MatExpr α n 1
+
 namespace MatExpr
 
 /-! ### Identity Predicate (for lowering case analysis)
@@ -407,6 +417,8 @@ def nodeCount : MatExpr α m n → Nat
   | mdsApply _ _ A => 1 + nodeCount A
   | addRoundConst _ _ A => 1 + nodeCount A
   | mapScalarExpr _ A   => 1 + nodeCount A
+  | bitDecompose _ A    => 1 + nodeCount A
+  | bitCompose _ A      => 1 + nodeCount A
 
 /-- Estimate operation count after expansion (for cost model).
     This gives an upper bound on the number of scalar operations. -/
@@ -446,6 +458,12 @@ def opCountEstimate : MatExpr α m n → Nat
   | mapScalarExpr _ A =>
     let baseCost := opCountEstimate A
     baseCost + m * 10  -- Assume ~10 ops per scalar eval (polynomial in cols vars)
+  | bitDecompose width A =>
+    let baseCost := opCountEstimate A
+    baseCost + m * width  -- width bit extractions per row
+  | bitCompose width A =>
+    let baseCost := opCountEstimate A
+    baseCost + m * width  -- width additions per row
 
 /-- Full round S-box: apply x^α to all state elements -/
 def fullRoundSbox (α : Nat) (state : MatExpr β m n) : MatExpr β m n :=

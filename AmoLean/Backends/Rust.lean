@@ -495,6 +495,24 @@ def matExprToRust (name : String) (m n : Nat) (e : AmoLean.Matrix.MatExpr Int m 
   let expanded := expandSigmaExpr sigma
   generateRustFile name n m expanded
 
+/-! ## Part 9a½: Shared Witness Emission (backend-independent)
+
+Witness preambles operate on raw i64 values BEFORE entering the ring.
+All three backends (i64, R128, C) use the same witness emission. -/
+
+/-- Emit imperative bit extraction for bitDecompose.
+    Generates `let b_i = (d >> i) & 1;` for each bit.
+    `inputExpr` is the Rust expression for the integer value to decompose.
+    `outputPrefix` is the variable prefix for the bits (e.g., "output[base + "). -/
+def emitBitDecomposeWitness (width : Nat) (indent : Nat)
+    (inputExpr : String) (scatterBase : String) (scatterStride : Nat) : String :=
+  let pad := indentStr indent
+  let lines := (List.range width).map fun i =>
+    let outIdx := if scatterStride == 1 then s!"{scatterBase} + {i}"
+                  else s!"{scatterBase} + {i} * {scatterStride}"
+    s!"{pad}output[{outIdx}] = (({inputExpr}) >> {i}) & 1;"
+  String.intercalate "\n" lines
+
 /-! ## Part 9b: Plain i64 Rust Emitter (no NttField generics) -/
 
 /-- Generate Rust i64 expression from ScalarExpr -/
@@ -555,7 +573,15 @@ partial def expandedSigmaToRustI64 (e : ExpandedSigma) (state : RustCodeGenState
   let pad := indentStr state.indent
   match e with
   | .scalar k g s =>
-    scalarBlockToRustI64 k.body state.indent g s
+    -- Emit witness preamble if tagged
+    let witnessPreamble := match k.witness with
+      | .bitDecompose width =>
+        let inputExpr := s!"input[{gatherOffset g}]"
+        emitBitDecomposeWitness width state.indent inputExpr (scatterOffset s) s.stride
+      | _ => ""
+    let ringCode := scalarBlockToRustI64 k.body state.indent g s
+    if witnessPreamble.isEmpty then ringCode
+    else s!"{witnessPreamble}\n{ringCode}"
   | .loop n v body =>
     let loopVar := s!"i{v}"
     let lbrace := "{"
@@ -667,7 +693,15 @@ partial def expandedSigmaToRustR128 (e : ExpandedSigma) (state : RustCodeGenStat
   let pad := indentStr state.indent
   match e with
   | .scalar k g s =>
-    scalarBlockToRustR128 k.body state.indent g s
+    -- Emit witness preamble if tagged (same i64 witness for R128 — bits are integers)
+    let witnessPreamble := match k.witness with
+      | .bitDecompose width =>
+        let inputExpr := s!"input[{gatherOffset g}].to_num::<i64>()"
+        emitBitDecomposeWitness width state.indent inputExpr (scatterOffset s) s.stride
+      | _ => ""
+    let ringCode := scalarBlockToRustR128 k.body state.indent g s
+    if witnessPreamble.isEmpty then ringCode
+    else s!"{witnessPreamble}\n{ringCode}"
   | .loop n v body =>
     let loopVar := s!"i{v}"
     let lbrace := "{"
