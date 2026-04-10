@@ -35,7 +35,7 @@ instance [OfNat α n] : OfNat (Expr α) n where
 
 /-- Smart constructor: suma que simplifica casos triviales -/
 def smartAdd [BEq α] [OfNat α 0] : Expr α → Expr α → Expr α
-  | const a, const b => const a  -- Placeholder: necesitamos Add α
+  | const a, const _ => const a  -- Placeholder: necesitamos Add α
   | const c, e | e, const c => 
       if c == (0 : α) then e else add (const c) e
   | e1, e2 => add e1 e2

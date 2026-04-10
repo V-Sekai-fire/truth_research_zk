@@ -300,7 +300,7 @@ def expandMDSInternal (size : Nat) : ExpandedKernel :=
 
 /-- Expand add round constants: y[i] = x[i] + RC[round][i]
     RC values are symbolic (not embedded) -/
-def expandAddRoundConst (round : Nat) (size : Nat) : ExpandedKernel :=
+def expandAddRoundConst (_ : Nat) (size : Nat) : ExpandedKernel :=
   let inputs := List.range size |>.map ScalarVar.input
   let outputs := List.range size |>.map ScalarVar.output
   -- Symbolic: y_i = x_i + rc_i

@@ -556,7 +556,7 @@ end Perm
 -- Auxiliary lemmas for tensor_compose_pointwise
 -- Key: For a*n + b with b < n, we have (a*n + b)/n = a and (a*n + b)%n = b
 
-private theorem nat_mul_add_div_eq (a b n : Nat) (hn : n > 0) (hb : b < n) :
+private theorem nat_mul_add_div_eq (a b n : Nat) (_ : n > 0) (hb : b < n) :
     (a * n + b) / n = a := by
   have key : a * n + b < (a + 1) * n := by
     simp only [Nat.add_mul, Nat.one_mul]
@@ -575,7 +575,7 @@ namespace Perm
 /-- Direct computation of tensor application without using applyIndex pattern matching.
     This avoids the splitter limitation by computing directly. -/
 def applyTensorDirect {m n : Nat} (p : Perm m) (q : Perm n)
-    (i : Fin (m * n)) (hn : n ≠ 0) (hm : m ≠ 0) : Fin (m * n) :=
+    (i : Fin (m * n)) (hn : n ≠ 0) (_ : m ≠ 0) : Fin (m * n) :=
   let outer := i.val / n
   let inner := i.val % n
   have h_n_pos : n > 0 := Nat.pos_of_ne_zero hn

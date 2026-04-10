@@ -131,7 +131,7 @@ instance : CommRing GF2Field where
   zsmul := zsmulRec
   natCast_zero := rfl
   natCast_succ n := by
-    simp only [NatCast.natCast, GF2Field.ofNat, GF2Field.add, GF2Field.one]
+    simp only [NatCast.natCast, GF2Field.ofNat]
     apply GF2Field.ext
     show ((n + 1) % 2 == 1) = xor (n % 2 == 1) true
     have h := Nat.mod_two_eq_zero_or_one n
