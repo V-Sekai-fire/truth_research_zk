@@ -55,6 +55,7 @@ extern "C" {
  * FRI operations - scalar version always available
  */
 #include "fri_fold.h"
+#include "experimental/eml_operator.h"
 
 #ifdef __cplusplus
 }

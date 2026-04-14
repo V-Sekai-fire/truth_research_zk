@@ -495,6 +495,253 @@ def matExprToRust (name : String) (m n : Nat) (e : AmoLean.Matrix.MatExpr Int m 
   let expanded := expandSigmaExpr sigma
   generateRustFile name n m expanded
 
+/-! ## Part 9a½: Shared Witness Emission (backend-independent)
+
+Witness preambles operate on raw i64 values BEFORE entering the ring.
+All three backends (i64, R128, C) use the same witness emission. -/
+
+/-- Emit imperative bit extraction for bitDecompose.
+    Generates `let b_i = (d >> i) & 1;` for each bit.
+    `inputExpr` is the Rust expression for the integer value to decompose.
+    `outputPrefix` is the variable prefix for the bits (e.g., "output[base + "). -/
+def emitBitDecomposeWitness (width : Nat) (indent : Nat)
+    (inputExpr : String) (scatterBase : String) (scatterStride : Nat) : String :=
+  let pad := indentStr indent
+  let lines := (List.range width).map fun i =>
+    let outIdx := if scatterStride == 1 then s!"{scatterBase} + {i}"
+                  else s!"{scatterBase} + {i} * {scatterStride}"
+    s!"{pad}output[{outIdx}] = (({inputExpr}) >> {i}) & 1;"
+  String.intercalate "\n" lines
+
+/-! ## Part 9b: Plain i64 Rust Emitter (no NttField generics) -/
+
+/-- Generate Rust i64 expression from ScalarExpr -/
+partial def exprToRustI64 (e : ScalarExpr) (baseOffset : String := "") : String :=
+  match e with
+  | .var v => varToRust v baseOffset
+  | .const n =>
+    if n < 0 then s!"({n}i64)" else s!"{n}i64"
+  | .neg e' => s!"(-{exprToRustI64 e' baseOffset})"
+  | .add e1 e2 => s!"({exprToRustI64 e1 baseOffset} + {exprToRustI64 e2 baseOffset})"
+  | .sub e1 e2 => s!"({exprToRustI64 e1 baseOffset} - {exprToRustI64 e2 baseOffset})"
+  | .mul e1 e2 => s!"({exprToRustI64 e1 baseOffset} * {exprToRustI64 e2 baseOffset})"
+
+/-- Generate Rust i64 code for a scalar block with stride support -/
+def scalarBlockToRustI64 (block : ScalarBlock) (indent : Nat) (g : Gather) (s : Scatter) : String :=
+  let gatherBase := gatherOffset g
+  let scatterBase := scatterOffset s
+  let gatherStride := g.stride
+  let scatterStride := s.stride
+  let lines := block.map fun a =>
+    match a.target.name with
+    | "y" =>
+      let pad := indentStr indent
+      let outIdx := genIndexWithStride scatterBase scatterStride a.target.idx
+      let lhs := s!"output[{outIdx}]"
+      let rhsStr := genRhsI64 a.value gatherBase gatherStride
+      s!"{pad}{lhs} = {rhsStr};"
+    | "t" =>
+      let pad := indentStr indent
+      let lhs := s!"t{a.target.idx}"
+      let rhsStr := genRhsI64 a.value gatherBase gatherStride
+      s!"{pad}let {lhs}: i64 = {rhsStr};"
+    | _ =>
+      let pad := indentStr indent
+      let lhs := varToRust a.target ""
+      let rhs := exprToRustI64 a.value ""
+      s!"{pad}{lhs} = {rhs};"
+  String.intercalate "\n" lines
+where
+  genRhsI64 (e : ScalarExpr) (gatherBase : String) (gatherStride : Nat) : String :=
+    match e with
+    | .var v =>
+      match v.name with
+      | "x" =>
+        let inIdx := genIndexWithStride gatherBase gatherStride v.idx
+        s!"input[{inIdx}]"
+      | "t" => s!"t{v.idx}"
+      | _ => varToRust v ""
+    | .const n =>
+      if n < 0 then s!"({n}i64)" else s!"{n}i64"
+    | .neg e' => s!"(-{genRhsI64 e' gatherBase gatherStride})"
+    | .add e1 e2 => s!"({genRhsI64 e1 gatherBase gatherStride} + {genRhsI64 e2 gatherBase gatherStride})"
+    | .sub e1 e2 => s!"({genRhsI64 e1 gatherBase gatherStride} - {genRhsI64 e2 gatherBase gatherStride})"
+    | .mul e1 e2 => s!"({genRhsI64 e1 gatherBase gatherStride} * {genRhsI64 e2 gatherBase gatherStride})"
+
+/-- Generate Rust i64 code for ExpandedSigma -/
+partial def expandedSigmaToRustI64 (e : ExpandedSigma) (state : RustCodeGenState) : String :=
+  let pad := indentStr state.indent
+  match e with
+  | .scalar k g s =>
+    -- Emit witness preamble if tagged
+    let witnessPreamble := match k.witness with
+      | .bitDecompose width =>
+        let inputExpr := s!"input[{gatherOffset g}]"
+        emitBitDecomposeWitness width state.indent inputExpr (scatterOffset s) s.stride
+      | _ => ""
+    let ringCode := scalarBlockToRustI64 k.body state.indent g s
+    if witnessPreamble.isEmpty then ringCode
+    else s!"{witnessPreamble}\n{ringCode}"
+  | .loop n v body =>
+    let loopVar := s!"i{v}"
+    let lbrace := "{"
+    let rbrace := "}"
+    let header := s!"{pad}for {loopVar} in 0..{n} {lbrace}"
+    let bodyCode := expandedSigmaToRustI64 body state.increaseIndent
+    let footer := s!"{pad}{rbrace}"
+    s!"{header}\n{bodyCode}\n{footer}"
+  | .seq s1 s2 =>
+    let code1 := expandedSigmaToRustI64 s1 state
+    let code2 := expandedSigmaToRustI64 s2 state
+    s!"{code1}\n{code2}"
+  | .par s1 s2 =>
+    let code1 := expandedSigmaToRustI64 s1 state
+    let code2 := expandedSigmaToRustI64 s2 state
+    s!"{pad}// parallel region\n{code1}\n{code2}"
+  | .temp size body =>
+    let (tempName, state') := state.freshTemp
+    let decl := s!"{pad}let mut {tempName}: [i64; {size}] = [0i64; {size}];"
+    let bodyCode := expandedSigmaToRustI64 body state'
+    s!"{decl}\n{bodyCode}"
+  | .nop => s!"{pad}// nop"
+
+/-- Generate a complete i64 Rust function from ExpandedSigma -/
+def generateFunctionI64 (name : String) (_inputSize _outputSize : Nat) (e : ExpandedSigma) : String :=
+  let lbrace := "{"
+  let rbrace := "}"
+  let signature := s!"pub fn {name}(input: &[i64], output: &mut [i64])"
+  let body := expandedSigmaToRustI64 e { indent := 1 }
+  s!"{signature} {lbrace}\n{body}\n{rbrace}"
+
+/-- Full pipeline: MatExpr → SigmaExpr → ExpandedSigma → Rust i64 code -/
+def matExprToRustI64 (name : String) (m n : Nat) (e : AmoLean.Matrix.MatExpr Int m n) : String :=
+  let sigma := lowerFresh m n e
+  let expanded := expandSigmaExpr sigma
+  let header := "// Generated by AMO-Lean Sigma-SPL Rust CodeGen (i64 backend)\n\n"
+  let func := generateFunctionI64 name n m expanded
+  header ++ func
+
+/-! ## Part 9c: R128 (64.64 fixed-point) Rust Emitter
+    Uses the `fixed` crate's `I64F64` type. R128 is a commutative ring under {+, *, const}.
+    Eliminates i64 overflow in SAH polynomials at large entity counts / ticks_ahead. -/
+
+/-- The R128 fixed-point type name (from `fixed` crate) -/
+def r128Type : String := "I64F64"
+
+/-- Generate Rust R128 expression from ScalarExpr -/
+partial def exprToRustR128 (e : ScalarExpr) (baseOffset : String := "") : String :=
+  match e with
+  | .var v => varToRust v baseOffset
+  | .const n =>
+    if n == 0 then s!"{r128Type}::ZERO"
+    else if n == 1 then s!"{r128Type}::ONE"
+    else if n == -1 then s!"(-{r128Type}::ONE)"
+    else if n >= 0 then s!"{r128Type}::from_num({n}i64)"
+    else s!"(-{r128Type}::from_num({-n}i64))"
+  | .neg e' => s!"(-{exprToRustR128 e' baseOffset})"
+  | .add e1 e2 => s!"({exprToRustR128 e1 baseOffset} + {exprToRustR128 e2 baseOffset})"
+  | .sub e1 e2 => s!"({exprToRustR128 e1 baseOffset} - {exprToRustR128 e2 baseOffset})"
+  | .mul e1 e2 => s!"({exprToRustR128 e1 baseOffset} * {exprToRustR128 e2 baseOffset})"
+
+/-- Generate Rust R128 code for a scalar block with stride support -/
+def scalarBlockToRustR128 (block : ScalarBlock) (indent : Nat) (g : Gather) (s : Scatter) : String :=
+  let gatherBase := gatherOffset g
+  let scatterBase := scatterOffset s
+  let gatherStride := g.stride
+  let scatterStride := s.stride
+  let lines := block.map fun a =>
+    match a.target.name with
+    | "y" =>
+      let pad := indentStr indent
+      let outIdx := genIndexWithStride scatterBase scatterStride a.target.idx
+      let lhs := s!"output[{outIdx}]"
+      let rhsStr := genRhsR128 a.value gatherBase gatherStride
+      s!"{pad}{lhs} = {rhsStr};"
+    | "t" =>
+      let pad := indentStr indent
+      let lhs := s!"t{a.target.idx}"
+      let rhsStr := genRhsR128 a.value gatherBase gatherStride
+      s!"{pad}let {lhs}: {r128Type} = {rhsStr};"
+    | _ =>
+      let pad := indentStr indent
+      let lhs := varToRust a.target ""
+      let rhs := exprToRustR128 a.value ""
+      s!"{pad}{lhs} = {rhs};"
+  String.intercalate "\n" lines
+where
+  genRhsR128 (e : ScalarExpr) (gatherBase : String) (gatherStride : Nat) : String :=
+    match e with
+    | .var v =>
+      match v.name with
+      | "x" =>
+        let inIdx := genIndexWithStride gatherBase gatherStride v.idx
+        s!"input[{inIdx}]"
+      | "t" => s!"t{v.idx}"
+      | _ => varToRust v ""
+    | .const n =>
+      if n == 0 then s!"{r128Type}::ZERO"
+      else if n == 1 then s!"{r128Type}::ONE"
+      else if n >= 0 then s!"{r128Type}::from_num({n}i64)"
+      else s!"(-{r128Type}::from_num({-n}i64))"
+    | .neg e' => s!"(-{genRhsR128 e' gatherBase gatherStride})"
+    | .add e1 e2 => s!"({genRhsR128 e1 gatherBase gatherStride} + {genRhsR128 e2 gatherBase gatherStride})"
+    | .sub e1 e2 => s!"({genRhsR128 e1 gatherBase gatherStride} - {genRhsR128 e2 gatherBase gatherStride})"
+    | .mul e1 e2 => s!"({genRhsR128 e1 gatherBase gatherStride} * {genRhsR128 e2 gatherBase gatherStride})"
+
+/-- Generate Rust R128 code for ExpandedSigma -/
+partial def expandedSigmaToRustR128 (e : ExpandedSigma) (state : RustCodeGenState) : String :=
+  let pad := indentStr state.indent
+  match e with
+  | .scalar k g s =>
+    -- Emit witness preamble if tagged (same i64 witness for R128 — bits are integers)
+    let witnessPreamble := match k.witness with
+      | .bitDecompose width =>
+        let inputExpr := s!"input[{gatherOffset g}].to_num::<i64>()"
+        emitBitDecomposeWitness width state.indent inputExpr (scatterOffset s) s.stride
+      | _ => ""
+    let ringCode := scalarBlockToRustR128 k.body state.indent g s
+    if witnessPreamble.isEmpty then ringCode
+    else s!"{witnessPreamble}\n{ringCode}"
+  | .loop n v body =>
+    let loopVar := s!"i{v}"
+    let lbrace := "{"
+    let rbrace := "}"
+    let header := s!"{pad}for {loopVar} in 0..{n} {lbrace}"
+    let bodyCode := expandedSigmaToRustR128 body state.increaseIndent
+    let footer := s!"{pad}{rbrace}"
+    s!"{header}\n{bodyCode}\n{footer}"
+  | .seq s1 s2 =>
+    let code1 := expandedSigmaToRustR128 s1 state
+    let code2 := expandedSigmaToRustR128 s2 state
+    s!"{code1}\n{code2}"
+  | .par s1 s2 =>
+    let code1 := expandedSigmaToRustR128 s1 state
+    let code2 := expandedSigmaToRustR128 s2 state
+    s!"{pad}// parallel region\n{code1}\n{code2}"
+  | .temp size body =>
+    let (tempName, state') := state.freshTemp
+    let decl := s!"{pad}let mut {tempName}: [{r128Type}; {size}] = [{r128Type}::ZERO; {size}];"
+    let bodyCode := expandedSigmaToRustR128 body state'
+    s!"{decl}\n{bodyCode}"
+  | .nop => s!"{pad}// nop"
+
+/-- Generate a complete R128 Rust function from ExpandedSigma -/
+def generateFunctionR128 (name : String) (_inputSize _outputSize : Nat) (e : ExpandedSigma) : String :=
+  let lbrace := "{"
+  let rbrace := "}"
+  let signature := s!"pub fn {name}(input: &[{r128Type}], output: &mut [{r128Type}])"
+  let body := expandedSigmaToRustR128 e { indent := 1 }
+  s!"{signature} {lbrace}\n{body}\n{rbrace}"
+
+/-- Full pipeline: MatExpr → SigmaExpr → ExpandedSigma → Rust R128 code -/
+def matExprToRustR128 (name : String) (m n : Nat) (e : AmoLean.Matrix.MatExpr Int m n) : String :=
+  let sigma := lowerFresh m n e
+  let expanded := expandSigmaExpr sigma
+  let header := "// Generated by AMO-Lean Sigma-SPL Rust CodeGen (R128 fixed-point backend)\n"
+  let useDecl := "use fixed::types::I64F64;\n\n"
+  let func := generateFunctionR128 name n m expanded
+  header ++ useDecl ++ func
+
 /-! ## Part 10: Tests -/
 
 section Tests
@@ -552,6 +799,26 @@ def testGenNttFieldTrait : IO Unit := do
   IO.println generateNttFieldTrait
   IO.println ""
 
+-- Test 6: Generate i64 Rust for DFT_2
+def testGenDFT2RustI64 : IO Unit := do
+  IO.println "=== Test 6: Generate i64 Rust for DFT_2 ==="
+  let dft2 : MatExpr Int 2 2 := .dft 2
+  let sigma := lowerFresh 2 2 dft2
+  let expanded := expandSigmaExpr sigma
+  let code := generateFunctionI64 "dft_2_i64" 2 2 expanded
+  IO.println code
+  IO.println ""
+
+-- Test 7: Generate R128 Rust for DFT_2
+def testGenDFT2RustR128 : IO Unit := do
+  IO.println "=== Test 7: Generate R128 Rust for DFT_2 ==="
+  let dft2 : MatExpr Int 2 2 := .dft 2
+  let sigma := lowerFresh 2 2 dft2
+  let expanded := expandSigmaExpr sigma
+  let code := generateFunctionR128 "dft_2_r128" 2 2 expanded
+  IO.println code
+  IO.println ""
+
 -- Run all Rust codegen tests
 #eval! do
   testGenDFT2Rust
@@ -559,6 +826,8 @@ def testGenNttFieldTrait : IO Unit := do
   testGenDFT4CTRust
   testGenFullRustFile
   testGenNttFieldTrait
+  testGenDFT2RustI64
+  testGenDFT2RustR128
 
 end Tests
 

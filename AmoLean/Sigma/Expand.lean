@@ -121,11 +121,19 @@ end ScalarBlock
 
 /-! ## Part 3: Kernel Expansion -/
 
+/-- Tag for kernels that require witness generation before ring verification. -/
+inductive WitnessTag where
+  | none                         -- Pure computation, no witness needed
+  | bitDecompose (width : Nat)   -- Emit imperative bit extraction before ring check
+  | bitCompose (width : Nat)     -- Pure ring (Σ bᵢ*2ⁱ), no witness needed
+  deriving Repr, BEq, Inhabited
+
 /-- Expanded kernel: scalar operations replacing a symbolic kernel -/
 structure ExpandedKernel where
   inputVars : List ScalarVar
   outputVars : List ScalarVar
   body : ScalarBlock
+  witness : WitnessTag := .none
   deriving Repr, Inhabited
 
 namespace ExpandedKernel
@@ -292,7 +300,7 @@ def expandMDSInternal (size : Nat) : ExpandedKernel :=
 
 /-- Expand add round constants: y[i] = x[i] + RC[round][i]
     RC values are symbolic (not embedded) -/
-def expandAddRoundConst (round : Nat) (size : Nat) : ExpandedKernel :=
+def expandAddRoundConst (_ : Nat) (size : Nat) : ExpandedKernel :=
   let inputs := List.range size |>.map ScalarVar.input
   let outputs := List.range size |>.map ScalarVar.output
   -- Symbolic: y_i = x_i + rc_i
@@ -361,6 +369,78 @@ def expandKernel : Kernel → ExpandedKernel
   | .addRoundConst r n => expandAddRoundConst r n
   -- Phase 8: Radix-4 NTT
   | .butterfly4 => expandButterfly4
+  -- mapScalar: convert typed LowLevelProgram → ExpandedKernel (ScalarAssign list).
+  -- LowLevelExpr.varRef "x0" → ScalarExpr.var (input 0)
+  -- LowLevelExpr.litInt n → ScalarExpr.const n
+  -- LowLevelExpr.binOp "+" l r → ScalarExpr.add ...
+  -- Z↔GF(2) bridge kernels.
+  -- bitDecompose: witness bᵢ ∈ {0,1} satisfying d = Σ bᵢ·2ⁱ.
+  -- Ring verification: bᵢ*(1-bᵢ) = 0 for each bit, and sum constraint.
+  -- The "computation" (actual bit extraction) is done by the host; the ring verifies.
+  | .bitDecompose width =>
+    -- Decompose(d, [b₀..b_{w-1}]): pure ring verification constraints.
+    -- Execution: the Rust backend emits imperative `(d >> i) & 1` as a witness
+    --   preamble OUTSIDE the ring. The ring only sees the constraints below.
+    -- Verification (all pure {+,-,*,const,var}):
+    --   1. Boolean: bᵢ * (1 - bᵢ) = 0  for each i
+    --   2. Summation: Σ bᵢ * 2ⁱ = d
+    let inputVars := [ScalarVar.input 0]
+    let outputVars := (List.range width).map ScalarVar.output
+    -- The output variables (b₀..b_{w-1}) are witness-provided by the backend.
+    -- Constraint 1: bᵢ*(1-bᵢ) = 0 — each bit is 0 or 1.
+    -- Stored as temp assignments: t_i = b_i * (1 - b_i) (must equal 0).
+    let boolChecks := (List.range width).map fun i =>
+      let bi := ScalarExpr.var (.output i)
+      { target := ScalarVar.temp i
+        value := .mul bi (.sub (.const 1) bi)
+        : ScalarAssign }
+    -- Constraint 2: Σ bᵢ * 2ⁱ = d — summation matches input.
+    -- Stored as: t_w = (Σ bᵢ * 2ⁱ) - d (must equal 0).
+    let sumExpr := (List.range width).foldl (fun acc i =>
+      .add acc (.mul (.var (.output i)) (.const (2 ^ i)))) (.const 0 : ScalarExpr)
+    let sumCheck : ScalarAssign :=
+      { target := ScalarVar.temp width
+        value := .sub sumExpr (.var (.input 0)) }
+    { inputVars, outputVars, body := boolChecks ++ [sumCheck]
+      witness := .bitDecompose width }
+  | .bitCompose width =>
+    let inputVars := (List.range width).map ScalarVar.input
+    let outputVars := [ScalarVar.output 0]
+    -- Ring: output[0] = Σ input[i] * 2^i  (polynomial in ring!)
+    let sumExpr := (List.range width).foldl (fun acc i =>
+      .add acc (.mul (.var (.input i)) (.const (2 ^ i)))) (.const 0 : ScalarExpr)
+    { inputVars, outputVars, body := [{ target := ScalarVar.output 0, value := sumExpr }]
+      witness := .bitCompose width }
+  | .mapScalar cols program =>
+    let rec llToScalar : AmoLean.LowLevelExpr → ScalarExpr
+      | .litInt n => .const n
+      | .varRef s =>
+        if s.startsWith "x" then
+          .var (.input (s.drop 1 |>.toNat?.getD 0))
+        else if s.startsWith "t" then
+          .var (.temp (s.drop 1 |>.toNat?.getD 0))
+        else .var ⟨s, 0⟩
+      | .binOp op l r =>
+        let l' := llToScalar l; let r' := llToScalar r
+        match op with
+        | "+" => .add l' r'
+        | "-" => .sub l' r'
+        | "*" => .mul l' r'
+        | _   => .mul l' r'  -- fallback
+      | .funcCall _ args =>
+        match args with
+        | [a] => llToScalar a
+        | _ => .const 0  -- unsupported
+    let inputVars := (List.range cols).map ScalarVar.input
+    -- Convert each assignment: t0 := expr, t1 := expr, ...
+    let assigns := program.assignments.map fun a =>
+      let idx := a.varName.drop 1 |>.toNat?.getD 0
+      { target := ScalarVar.temp idx, value := llToScalar a.value : ScalarAssign }
+    -- Final result → output[0]
+    let outputAssign : ScalarAssign :=
+      { target := ScalarVar.output 0, value := llToScalar program.result }
+    { inputVars, outputVars := [ScalarVar.output 0],
+      body := assigns ++ [outputAssign] }
 
 /-! ## Part 4: Expanded SigmaExpr -/
 
