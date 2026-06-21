@@ -541,8 +541,7 @@ theorem toZMod_ofNat (n : Nat) :
     simp only [UInt32.lt_iff_toNat_lt, htoUInt32]
     exact hlt
   simp only [dif_pos hcond, htoUInt32]
-  rw [ZMod.natCast_eq_natCast_iff]
-  exact Nat.mod_modEq n ORDER.toNat
+  exact (ZMod.natCast_eq_natCast_iff _ _ _).mpr (Nat.mod_modEq n ORDER.toNat)
 
 /-- Bridge: BabyBearField.mul equals * (for simp unification). -/
 private theorem mul_def (a b : BabyBearField) : BabyBearField.mul a b = a * b := rfl
@@ -663,10 +662,12 @@ instance : CommRing BabyBearField where
   neg := BabyBearField.neg
   neg_add_cancel := fun a => by
     apply toZMod_injective
-    have hneg : toZMod a.neg = -toZMod a := toZMod_neg a
-    simp only [toZMod_add, toZMod_zero]
-    rw [hneg]
-    ring
+    rw [toZMod_add]
+    have hn : toZMod (BabyBearField.neg a) = -toZMod a := toZMod_neg a
+    rw [hn]
+    have hz : toZMod (0 : BabyBearField) = 0 := toZMod_zero
+    simp only [neg_add_cancel]
+    exact hz.symm
   nsmul := fun n a => BabyBearField.mul (BabyBearField.ofNat n) a
   nsmul_zero := fun a => by
     show BabyBearField.ofNat 0 * a = 0
@@ -762,11 +763,17 @@ instance : CommRing BabyBearField where
     simp only [toZMod_mul, toZMod_add]
     ring
   zero_mul := fun a => by
-    apply toZMod_injective
-    rw [toZMod_mul, toZMod_zero, zero_mul]
+    show BabyBearField.mul BabyBearField.zero a = BabyBearField.zero
+    simp only [BabyBearField.mul, BabyBearField.zero, BabyBearField.reduceMul]
+    ext
+    simp only [Nat.toUInt32, UInt32.toNat_ofNat']
+    simp
   mul_zero := fun a => by
-    apply toZMod_injective
-    rw [toZMod_mul, toZMod_zero, mul_zero]
+    show BabyBearField.mul a BabyBearField.zero = BabyBearField.zero
+    simp only [BabyBearField.mul, BabyBearField.zero, BabyBearField.reduceMul]
+    ext
+    simp only [Nat.toUInt32, UInt32.toNat_ofNat']
+    simp
   natCast := fun n => BabyBearField.ofNat n
   natCast_zero := by rfl
   natCast_succ := fun n => by
@@ -806,11 +813,8 @@ noncomputable instance : Field BabyBearField where
       toZMod_mul a a.inv
     have hinv : toZMod a.inv = (toZMod a)⁻¹ := toZMod_inv a
     rw [hmul, hinv, toZMod_one]
-    have hne : toZMod a ≠ 0 := by
-      intro heq
-      apply ha
-      apply toZMod_injective
-      rw [heq, toZMod_zero]
+    have hne : toZMod a ≠ 0 := fun heq =>
+      ha (toZMod_injective (heq.trans toZMod_zero.symm))
     exact mul_inv_cancel₀ hne
   inv_zero := by
     show BabyBearField.inv ⟨0, by native_decide⟩ = ⟨0, by native_decide⟩

@@ -5,10 +5,10 @@ package «amo-lean» where
   version := v!"2.2.0"
 
 require mathlib from git
-  "https://github.com/leanprover-community/mathlib4.git" @ "v4.26.0"
+  "https://github.com/leanprover-community/mathlib4.git" @ "v4.30.0"
 
 require TrustLean from git
-  "https://github.com/manuelpuebla/trust-lean"
+  "https://github.com/V-Sekai-fire/trust-lean.git" @ "mathlib-v4.30"
 
 @[default_target]
 lean_lib «AmoLean» where
