@@ -217,7 +217,7 @@ private lemma foldl_add_general (a b : List F) (ω : F) (k : Nat)
         have hi_lt_a : i < a.length := by omega
         have hsome : a[i]? = some (a[i]'hi_lt_a) := List.getElem?_eq_some_iff.mpr ⟨hi_lt_a, rfl⟩
         rw [ha] at hsome
-        exact Option.noConfusion hsome
+        simp at hsome
       simp only [hb]
       exact ih acc_ab acc_a acc_b h_acc
     | some aᵢ =>
@@ -228,7 +228,7 @@ private lemma foldl_add_general (a b : List F) (ω : F) (k : Nat)
         have hi_lt_b : i < b.length := by omega
         have hsome : b[i]? = some (b[i]'hi_lt_b) := List.getElem?_eq_some_iff.mpr ⟨hi_lt_b, rfl⟩
         rw [hb] at hsome
-        exact Option.noConfusion hsome
+        simp at hsome
       | some bᵢ =>
         simp only
         have h_new_acc : acc_ab + (aᵢ + bᵢ) * HPow.hPow ω (i * k) =

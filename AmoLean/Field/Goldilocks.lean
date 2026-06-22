@@ -1009,8 +1009,7 @@ theorem toZMod_ofNat (n : Nat) :
   simp only [dif_pos hcond, htoUInt64]
   -- Goal: (n % ORDER : ZMod ORDER) = (n : ZMod ORDER)
   -- In ZMod, x % n casts to same as x
-  rw [ZMod.natCast_eq_natCast_iff]
-  exact Nat.mod_modEq n ORDER.toNat
+  exact (ZMod.natCast_eq_natCast_iff _ _ _).mpr (Nat.mod_modEq n ORDER.toNat)
 
 /-- Bridge: GoldilocksField.mul equals * (for simp unification). -/
 private theorem mul_def (a b : GoldilocksField) : GoldilocksField.mul a b = a * b := rfl
@@ -1166,13 +1165,13 @@ instance : CommRing GoldilocksField where
   -- Negation
   neg := GoldilocksField.neg
   neg_add_cancel := fun a => by
-    -- -a + a = 0: Use toZMod_injective to reduce to ZMod
     apply toZMod_injective
-    -- Note: a.neg is the same as -a (GoldilocksField.neg a)
-    have hneg : toZMod a.neg = -toZMod a := toZMod_neg a
-    simp only [toZMod_add, toZMod_zero]
-    rw [hneg]
-    ring
+    rw [toZMod_add]
+    have hn : toZMod (GoldilocksField.neg a) = -toZMod a := toZMod_neg a
+    rw [hn]
+    have hz : toZMod (0 : GoldilocksField) = 0 := toZMod_zero
+    simp only [neg_add_cancel]
+    exact hz.symm
   -- nsmul - scalar multiplication by ℕ
   nsmul := fun n a => GoldilocksField.mul (GoldilocksField.ofNat n) a
   nsmul_zero := fun a => by
@@ -1417,11 +1416,8 @@ noncomputable instance : Field GoldilocksField where
     rw [hmul, hinv, toZMod_one]
     -- Now show: toZMod a * (toZMod a)⁻¹ = 1 in ZMod p
     -- Since ZMod p is a field and toZMod a ≠ 0
-    have hne : toZMod a ≠ 0 := by
-      intro heq
-      apply ha
-      apply toZMod_injective
-      rw [heq, toZMod_zero]
+    have hne : toZMod a ≠ 0 := fun heq =>
+      ha (toZMod_injective (heq.trans toZMod_zero.symm))
     exact mul_inv_cancel₀ hne
   inv_zero := by
     show GoldilocksField.inv ⟨0, by native_decide⟩ = ⟨0, by native_decide⟩
